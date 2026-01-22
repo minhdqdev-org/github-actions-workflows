@@ -50,15 +50,29 @@ on:
         required: false
         type: string
         description: "ArgoCD config repository URL (e.g., minhdqdev/argocd-config)"
+      argocd_update_mode:
+        required: false
+        type: string
+        default: "yq"
+        description: "Update mode: 'yq' for single file or 'sed' for pattern-based multi-file updates"
       argocd_image_path:
         required: false
         type: string
-        description: "Path to the image value in ArgoCD repo (e.g., apps/myapp/values.yaml)"
+        description: "Path to the image value in ArgoCD repo (e.g., apps/myapp/values.yaml) - used in 'yq' mode"
       argocd_image_key:
         required: false
         type: string
         default: ".image.tag"
-        description: "YAML key path for image tag (e.g., .image.tag)"
+        description: "YAML key path for image tag (e.g., .image.tag) - used in 'yq' mode"
+      argocd_update_pattern:
+        required: false
+        type: string
+        description: "File pattern for multi-file updates (e.g., base/myapp/deployment-*.yaml) - used in 'sed' mode"
+      argocd_repo_branch:
+        required: false
+        type: string
+        default: "main"
+        description: "Branch to update in ArgoCD config repository"
     secrets:
       HARBOR_USERNAME:
         required: true
@@ -173,11 +187,11 @@ jobs:
 
   update-argocd:
     needs: build-and-push
-    if: ${{ inputs.argocd_repo != '' && inputs.argocd_image_path != '' }}
+    if: ${{ inputs.argocd_repo != '' && (inputs.argocd_image_path != '' || inputs.argocd_update_pattern != '') }}
     runs-on: ${{ fromJson(inputs.runs_on) }}
     permissions:
-      contents: read
-    
+      contents: write
+
     steps:
       - name: Checkout ArgoCD config repository
         uses: actions/checkout@v4
@@ -185,26 +199,55 @@ jobs:
           repository: ${{ inputs.argocd_repo }}
           token: ${{ secrets.ARGOCD_REPO_TOKEN }}
           path: argocd-config
+          ref: ${{ inputs.argocd_repo_branch }}
 
-      - name: Update image tag in ArgoCD config
+      - name: Update image tag in ArgoCD config (yq mode)
+        if: ${{ inputs.argocd_update_mode == 'yq' }}
         run: |
           cd argocd-config
           VERSION="${{ needs.build-and-push.outputs.version }}"
-          
+
           # Install yq if not available
           if ! command -v yq &> /dev/null; then
             sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
             sudo chmod +x /usr/local/bin/yq
           fi
-          
+
           # Update the image tag
           yq eval -i '${{ inputs.argocd_image_key }} = "${{ inputs.harbor_registry }}/${{ inputs.harbor_project }}/${{ inputs.image_name }}:'"$VERSION"'"' ${{ inputs.argocd_image_path }}
-          
+
           # Configure git
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          
+
           # Commit and push
           git add ${{ inputs.argocd_image_path }}
           git commit -m "Update ${{ inputs.image_name }} to version $VERSION" || echo "No changes to commit"
           git push
+
+      - name: Update image tag in ArgoCD config (sed mode)
+        if: ${{ inputs.argocd_update_mode == 'sed' }}
+        run: |
+          cd argocd-config
+          VERSION="${{ needs.build-and-push.outputs.version }}"
+          NEW_IMAGE="${{ inputs.harbor_registry }}/${{ inputs.harbor_project }}/${{ inputs.image_name }}:${VERSION}"
+
+          # Update all matching deployment files
+          find . -path "./${{ inputs.argocd_update_pattern }}" -type f | while read -r file; do
+            sed -i "s|image: ${{ inputs.harbor_registry }}/${{ inputs.harbor_project }}/${{ inputs.image_name }}:.*|image: ${NEW_IMAGE}|g" "$file"
+            echo "Updated $file with image tag: ${VERSION}"
+          done
+
+          # Configure git
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          # Check if there are changes to commit
+          if git diff --quiet; then
+            echo "No changes to commit"
+          else
+            git add -A
+            git commit -m "Update ${{ inputs.image_name }} image to ${VERSION}"
+            git push
+            echo "Successfully updated ArgoCD config with image tag: ${VERSION}"
+          fi
