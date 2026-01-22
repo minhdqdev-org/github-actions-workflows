@@ -46,11 +46,27 @@ on:
         required: false
         type: string
         default: '["self-hosted", "minhdqdev-org", "manual"]'
+      argocd_repo:
+        required: false
+        type: string
+        description: "ArgoCD config repository URL (e.g., minhdqdev/argocd-config)"
+      argocd_image_path:
+        required: false
+        type: string
+        description: "Path to the image value in ArgoCD repo (e.g., apps/myapp/values.yaml)"
+      argocd_image_key:
+        required: false
+        type: string
+        default: ".image.tag"
+        description: "YAML key path for image tag (e.g., .image.tag)"
     secrets:
       HARBOR_USERNAME:
         required: true
       HARBOR_PASSWORD:
         required: true
+      ARGOCD_REPO_TOKEN:
+        required: false
+        description: "GitHub token with access to ArgoCD config repo"
 
 jobs:
   test:
@@ -103,6 +119,8 @@ jobs:
     runs-on: ${{ fromJson(inputs.runs_on) }}
     permissions:
       contents: read
+    outputs:
+      version: ${{ steps.version.outputs.VERSION }}
     
     steps:
       - name: Checkout repository
@@ -152,3 +170,41 @@ jobs:
             ${{ inputs.extra_tags }}
           cache-from: type=registry,ref=${{ inputs.harbor_registry }}/${{ inputs.harbor_project }}/${{ inputs.image_name }}:buildcache
           cache-to: type=registry,ref=${{ inputs.harbor_registry }}/${{ inputs.harbor_project }}/${{ inputs.image_name }}:buildcache,mode=max
+
+  update-argocd:
+    needs: build-and-push
+    if: ${{ inputs.argocd_repo != '' && inputs.argocd_image_path != '' }}
+    runs-on: ${{ fromJson(inputs.runs_on) }}
+    permissions:
+      contents: read
+    
+    steps:
+      - name: Checkout ArgoCD config repository
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.argocd_repo }}
+          token: ${{ secrets.ARGOCD_REPO_TOKEN }}
+          path: argocd-config
+
+      - name: Update image tag in ArgoCD config
+        run: |
+          cd argocd-config
+          VERSION="${{ needs.build-and-push.outputs.version }}"
+          
+          # Install yq if not available
+          if ! command -v yq &> /dev/null; then
+            sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
+            sudo chmod +x /usr/local/bin/yq
+          fi
+          
+          # Update the image tag
+          yq eval -i '${{ inputs.argocd_image_key }} = "${{ inputs.harbor_registry }}/${{ inputs.harbor_project }}/${{ inputs.image_name }}:'"$VERSION"'"' ${{ inputs.argocd_image_path }}
+          
+          # Configure git
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          
+          # Commit and push
+          git add ${{ inputs.argocd_image_path }}
+          git commit -m "Update ${{ inputs.image_name }} to version $VERSION" || echo "No changes to commit"
+          git push
