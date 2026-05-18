@@ -1,0 +1,62 @@
+name: Notify via NotiHub
+
+on:
+  workflow_call:
+    inputs:
+      project_name:
+        required: true
+        type: string
+        description: "Project name shown in the notification"
+      runs_on:
+        required: false
+        type: string
+        default: '["self-hosted", "minhdqdev-org", "manual"]'
+    secrets:
+      NOTIHUB_URL:
+        required: true
+
+jobs:
+  notify:
+    name: Send NotiHub alert
+    runs-on: ${{ fromJson(inputs.runs_on) }}
+    steps:
+      - name: Send success notification
+        env:
+          NOTIHUB_URL: ${{ secrets.NOTIHUB_URL }}
+          PROJECT_NAME: ${{ inputs.project_name }}
+          WORKFLOW: ${{ github.workflow }}
+          RUN_NUMBER: ${{ github.run_number }}
+          RUN_ID: ${{ github.run_id }}
+          SHA: ${{ github.sha }}
+          BRANCH: ${{ github.ref_name }}
+        run: |
+          python3 - <<'EOF'
+          import json, os, sys, urllib.request
+
+          sha = os.environ["SHA"]
+          payload = {
+              "traceNo": f"github-run-{os.environ['RUN_ID']}",
+              "origin": os.environ["PROJECT_NAME"],
+              "level": "success",
+              "data": {
+                  "title": f"✅ {os.environ['PROJECT_NAME']} — CI/CD succeeded",
+                  "message": (
+                      f"Workflow: {os.environ['WORKFLOW']}\n"
+                      f"Run #{os.environ['RUN_NUMBER']} on {os.environ['BRANCH']}\n"
+                      f"Commit: {sha[:7]}"
+                  ),
+              },
+          }
+
+          url = os.environ["NOTIHUB_URL"].rstrip("/") + "/api/v1/notifications/"
+          req = urllib.request.Request(
+              url,
+              data=json.dumps(payload).encode(),
+              headers={"Content-Type": "application/json"},
+          )
+          try:
+              with urllib.request.urlopen(req, timeout=15) as resp:
+                  print(f"Notification sent (HTTP {resp.status})")
+          except Exception as exc:
+              print(f"Warning: notification failed — {exc}", file=sys.stderr)
+          EOF
