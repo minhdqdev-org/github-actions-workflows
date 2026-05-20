@@ -15,6 +15,90 @@ on:
         required: false
         type: number
         default: 70
+      run_quality_gate:
+        required: false
+        type: boolean
+        default: true
+        description: "Run code quality checks (ruff linting and formatting)"
+      quality_gate_strict:
+        required: false
+        type: boolean
+        default: false
+        description: "Fail the pipeline if quality gate checks fail"
+      run_security_scan:
+        required: false
+        type: boolean
+        default: true
+        description: "Run security scanning (bandit and safety)"
+      security_scan_strict:
+        required: false
+        type: boolean
+        default: false
+        description: "Fail the pipeline if security issues are found"
+      ruff_config:
+        required: false
+        type: string
+        description: "Path to custom ruff configuration file (e.g., ruff.toml or pyproject.toml)"
+      upload_coverage_report:
+        required: false
+        type: boolean
+        default: true
+        description: "Upload HTML coverage report as artifact"
+      quality_gate_max_errors:
+        required: false
+        type: number
+        default: 5
+        description: "Maximum number of errors allowed in quality gate (startup: 5, banking: 0)"
+      quality_gate_max_warnings:
+        required: false
+        type: number
+        default: 50
+        description: "Maximum number of warnings allowed in quality gate"
+      run_django_checks:
+        required: false
+        type: boolean
+        default: true
+        description: "Run Django-specific checks (manage.py check, migrations)"
+      django_checks_strict:
+        required: false
+        type: boolean
+        default: true
+        description: "Fail the pipeline if Django checks fail"
+      scan_image_security:
+        required: false
+        type: boolean
+        default: true
+        description: "Scan Docker image for security vulnerabilities with Trivy"
+      image_security_severity:
+        required: false
+        type: string
+        default: "CRITICAL,HIGH"
+        description: "Comma-separated severity levels to scan (CRITICAL,HIGH,MEDIUM,LOW)"
+      image_security_strict:
+        required: false
+        type: boolean
+        default: false
+        description: "Fail the pipeline if image vulnerabilities are found"
+      generate_sbom:
+        required: false
+        type: boolean
+        default: true
+        description: "Generate Software Bill of Materials (SBOM)"
+      security_gate_max_critical:
+        required: false
+        type: number
+        default: 0
+        description: "Maximum critical vulnerabilities allowed (banking: 0)"
+      security_gate_max_high:
+        required: false
+        type: number
+        default: 2
+        description: "Maximum high vulnerabilities allowed (startup: 2, banking: 0)"
+      security_gate_max_medium:
+        required: false
+        type: number
+        default: 10
+        description: "Maximum medium vulnerabilities allowed (startup: 10, banking: 5)"
       version:
         required: false
         type: string
@@ -37,7 +121,7 @@ on:
       harbor_registry:
         required: false
         type: string
-        default: "harbor.minhdq.dev"
+        default: "harbor.internal.minhdq.dev"
       dockerfile:
         required: false
         type: string
@@ -117,7 +201,7 @@ jobs:
 
       - name: Run Tests
         run: |
-          CMD="pytest --cov=. --cov-report=term-missing --cov-fail-under=${{ inputs.min_coverage }}"
+          CMD="pytest --cov=. --cov-report=term-missing --cov-report=html --cov-fail-under=${{ inputs.min_coverage }}"
           
           if [ -f "uv.lock" ]; then
             uv run $CMD
@@ -127,9 +211,305 @@ jobs:
             $CMD
           fi
 
+      - name: Upload Coverage Report
+        if: ${{ inputs.upload_coverage_report && success() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: htmlcov/
+          retention-days: 30
+
+  quality-gate:
+    if: ${{ inputs.run_quality_gate }}
+    runs-on: ${{ fromJson(inputs.runs_on) }}
+    continue-on-error: ${{ !inputs.quality_gate_strict }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        if: ${{ hashFiles('uv.lock') != '' }}
+        uses: astral-sh/setup-uv@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ inputs.python-version }}
+
+      - name: Install dependencies
+        run: |
+          if [ -f "uv.lock" ]; then
+            uv sync --all-extras --dev
+          elif [ -f "poetry.lock" ]; then
+            pip install poetry
+            poetry install
+          elif [ -f "requirements.txt" ]; then
+            pip install -r requirements.txt
+          else
+            pip install .
+          fi
+
+      - name: Install ruff
+        run: |
+          if [ -f "uv.lock" ]; then
+            uv pip install ruff
+          elif [ -f "poetry.lock" ]; then
+            poetry add --group dev ruff || poetry run pip install ruff
+          else
+            pip install ruff
+          fi
+
+      - name: Run ruff linting
+        id: ruff_check
+        run: |
+          CONFIG_ARG=""
+          if [ -n "${{ inputs.ruff_config }}" ]; then
+            CONFIG_ARG="--config ${{ inputs.ruff_config }}"
+          fi
+          
+          # Run ruff and capture output in JSON format for parsing
+          if [ -f "uv.lock" ]; then
+            uv run ruff check . --output-format=json $CONFIG_ARG > ruff-report.json || true
+            uv run ruff check . --output-format=github $CONFIG_ARG || true
+          elif [ -f "poetry.lock" ]; then
+            poetry run ruff check . --output-format=json $CONFIG_ARG > ruff-report.json || true
+            poetry run ruff check . --output-format=github $CONFIG_ARG || true
+          else
+            ruff check . --output-format=json $CONFIG_ARG > ruff-report.json || true
+            ruff check . --output-format=github $CONFIG_ARG || true
+          fi
+
+      - name: Run ruff format check
+        run: |
+          CONFIG_ARG=""
+          if [ -n "${{ inputs.ruff_config }}" ]; then
+            CONFIG_ARG="--config ${{ inputs.ruff_config }}"
+          fi
+          
+          if [ -f "uv.lock" ]; then
+            uv run ruff format --check . $CONFIG_ARG
+          elif [ -f "poetry.lock" ]; then
+            poetry run ruff format --check . $CONFIG_ARG
+          else
+            ruff format --check . $CONFIG_ARG
+          fi
+
+      - name: Check quality gate thresholds
+        if: ${{ inputs.quality_gate_strict }}
+        run: |
+          # Parse ruff JSON output and count issues by severity
+          ERROR_COUNT=$(cat ruff-report.json | python3 -c "import sys, json; data = json.load(sys.stdin); print(sum(1 for item in data if item.get('code', '').startswith('E')))" 2>/dev/null || echo 0)
+          WARNING_COUNT=$(cat ruff-report.json | python3 -c "import sys, json; data = json.load(sys.stdin); print(sum(1 for item in data if item.get('code', '').startswith('W')))" 2>/dev/null || echo 0)
+          TOTAL_COUNT=$(cat ruff-report.json | python3 -c "import sys, json; data = json.load(sys.stdin); print(len(data))" 2>/dev/null || echo 0)
+          
+          echo "Quality Gate Results:"
+          echo "  Total Issues: $TOTAL_COUNT"
+          echo "  Errors: $ERROR_COUNT (max: ${{ inputs.quality_gate_max_errors }})"
+          echo "  Warnings: $WARNING_COUNT (max: ${{ inputs.quality_gate_max_warnings }})"
+          
+          FAILED=0
+          if [ "$ERROR_COUNT" -gt "${{ inputs.quality_gate_max_errors }}" ]; then
+            echo "❌ ERROR: Too many errors ($ERROR_COUNT > ${{ inputs.quality_gate_max_errors }})"
+            FAILED=1
+          fi
+          
+          if [ "$WARNING_COUNT" -gt "${{ inputs.quality_gate_max_warnings }}" ]; then
+            echo "❌ ERROR: Too many warnings ($WARNING_COUNT > ${{ inputs.quality_gate_max_warnings }})"
+            FAILED=1
+          fi
+          
+          if [ "$FAILED" -eq 1 ]; then
+            echo "Quality gate FAILED - thresholds exceeded"
+            exit 1
+          else
+            echo "✅ Quality gate PASSED"
+          fi
+
+      - name: Upload quality report
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: quality-report
+          path: ruff-report.json
+          retention-days: 30
+
+  django-checks:
+    if: ${{ inputs.run_django_checks }}
+    runs-on: ${{ fromJson(inputs.runs_on) }}
+    continue-on-error: ${{ !inputs.django_checks_strict }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        if: ${{ hashFiles('uv.lock') != '' }}
+        uses: astral-sh/setup-uv@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ inputs.python-version }}
+
+      - name: Install dependencies
+        run: |
+          if [ -f "uv.lock" ]; then
+            uv sync --all-extras --dev
+          elif [ -f "poetry.lock" ]; then
+            pip install poetry
+            poetry install
+          elif [ -f "requirements.txt" ]; then
+            pip install -r requirements.txt
+          else
+            pip install .
+          fi
+
+      - name: Run Django system check
+        run: |
+          # Django check with deployment settings
+          echo "Running Django system checks..."
+          if [ -f "uv.lock" ]; then
+            uv run python manage.py check --deploy --fail-level WARNING || true
+            uv run python manage.py check --deploy
+          elif [ -f "poetry.lock" ]; then
+            poetry run python manage.py check --deploy --fail-level WARNING || true
+            poetry run python manage.py check --deploy
+          else
+            python manage.py check --deploy --fail-level WARNING || true
+            python manage.py check --deploy
+          fi
+
+      - name: Check for pending migrations
+        run: |
+          echo "Checking for pending migrations..."
+          if [ -f "uv.lock" ]; then
+            uv run python manage.py makemigrations --check --dry-run
+          elif [ -f "poetry.lock" ]; then
+            poetry run python manage.py makemigrations --check --dry-run
+          else
+            python manage.py makemigrations --check --dry-run
+          fi
+
+      - name: Validate migrations
+        run: |
+          echo "Validating existing migrations..."
+          if [ -f "uv.lock" ]; then
+            uv run python manage.py makemigrations --check
+          elif [ -f "poetry.lock" ]; then
+            poetry run python manage.py makemigrations --check
+          else
+            python manage.py makemigrations --check
+          fi
+
+  security-scan:
+    if: ${{ inputs.run_security_scan }}
+    runs-on: ${{ fromJson(inputs.runs_on) }}
+    continue-on-error: ${{ !inputs.security_scan_strict }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        if: ${{ hashFiles('uv.lock') != '' }}
+        uses: astral-sh/setup-uv@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ inputs.python-version }}
+
+      - name: Install dependencies
+        run: |
+          if [ -f "uv.lock" ]; then
+            uv sync --all-extras --dev
+          elif [ -f "poetry.lock" ]; then
+            pip install poetry
+            poetry install
+          elif [ -f "requirements.txt" ]; then
+            pip install -r requirements.txt
+          else
+            pip install .
+          fi
+
+      - name: Install security tools
+        run: |
+          if [ -f "uv.lock" ]; then
+            uv pip install bandit safety
+          elif [ -f "poetry.lock" ]; then
+            poetry add --group dev bandit safety || poetry run pip install bandit safety
+          else
+            pip install bandit safety
+          fi
+
+      - name: Run bandit security scan
+        run: |
+          if [ -f "uv.lock" ]; then
+            uv run bandit -r . -f json -o bandit-report.json || true
+            uv run bandit -r . -f txt
+          elif [ -f "poetry.lock" ]; then
+            poetry run bandit -r . -f json -o bandit-report.json || true
+            poetry run bandit -r . -f txt
+          else
+            bandit -r . -f json -o bandit-report.json || true
+            bandit -r . -f txt
+          fi
+
+      - name: Run safety dependency scan
+        run: |
+          if [ -f "uv.lock" ]; then
+            uv run safety check --json > safety-report.json || true
+            uv run safety check
+          elif [ -f "poetry.lock" ]; then
+            poetry run safety check --json > safety-report.json || true
+            poetry run safety check
+          else
+            safety check --json > safety-report.json || true
+            safety check
+          fi
+
+      - name: Install Trivy
+        run: |
+          wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key | sudo apt-key add -
+          echo "deb https://aquasecurity.github.io/trivy-repo/deb $(lsb_release -sc) main" | sudo tee -a /etc/apt/sources.list.d/trivy.list
+          sudo apt-get update
+          sudo apt-get install -y trivy
+
+      - name: Run Trivy filesystem scan (SCA)
+        run: |
+          echo "Running Trivy SCA scan..."
+          trivy fs --format json --output trivy-fs-report.json . || true
+          trivy fs --severity ${{ inputs.image_security_severity }} .
+
+      - name: Generate SBOM
+        if: ${{ inputs.generate_sbom }}
+        run: |
+          echo "Generating Software Bill of Materials..."
+          trivy fs --format cyclonedx --output sbom-cyclonedx.json .
+          trivy fs --format spdx-json --output sbom-spdx.json .
+
+      - name: Upload security reports
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: security-reports
+          path: |
+            bandit-report.json
+            safety-report.json
+            trivy-fs-report.json
+          retention-days: 30
+
+      - name: Upload SBOM
+        if: ${{ inputs.generate_sbom && always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom
+          path: |
+            sbom-cyclonedx.json
+            sbom-spdx.json
+          retention-days: 90
+
   build-and-push:
-    needs: test
-    if: ${{ always() && (needs.test.result == 'success' || needs.test.result == 'skipped') }}
+    needs: [test, quality-gate, django-checks, security-scan]
+    if: ${{ always() && (needs.test.result == 'success' || needs.test.result == 'skipped') && (needs.quality-gate.result == 'success' || needs.quality-gate.result == 'skipped') && (needs.django-checks.result == 'success' || needs.django-checks.result == 'skipped') && (needs.security-scan.result == 'success' || needs.security-scan.result == 'skipped') }}
     runs-on: ${{ fromJson(inputs.runs_on) }}
     permissions:
       contents: read
@@ -185,9 +565,178 @@ jobs:
           cache-from: type=registry,ref=${{ inputs.harbor_registry }}/${{ inputs.harbor_project }}/${{ inputs.image_name }}:buildcache
           cache-to: type=registry,ref=${{ inputs.harbor_registry }}/${{ inputs.harbor_project }}/${{ inputs.image_name }}:buildcache,mode=max
 
-  update-argocd:
+  scan-image-security:
     needs: build-and-push
-    if: ${{ inputs.argocd_repo != '' && (inputs.argocd_image_path != '' || inputs.argocd_update_pattern != '') }}
+    if: ${{ inputs.scan_image_security }}
+    runs-on: ${{ fromJson(inputs.runs_on) }}
+    continue-on-error: ${{ !inputs.image_security_strict }}
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Log in to Harbor
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ inputs.harbor_registry }}
+          username: ${{ secrets.HARBOR_USERNAME }}
+          password: ${{ secrets.HARBOR_PASSWORD }}
+
+      - name: Install Trivy
+        run: |
+          wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key | sudo apt-key add -
+          echo "deb https://aquasecurity.github.io/trivy-repo/deb $(lsb_release -sc) main" | sudo tee -a /etc/apt/sources.list.d/trivy.list
+          sudo apt-get update
+          sudo apt-get install -y trivy
+
+      - name: Run Trivy image scan
+        run: |
+          IMAGE="${{ inputs.harbor_registry }}/${{ inputs.harbor_project }}/${{ inputs.image_name }}:${{ needs.build-and-push.outputs.version }}"
+          echo "Scanning image: $IMAGE"
+          
+          # Pull the image
+          docker pull "$IMAGE"
+          
+          # Scan and generate reports
+          trivy image --format json --output trivy-image-report.json "$IMAGE" || true
+          trivy image --format sarif --output trivy-image-report.sarif "$IMAGE" || true
+          trivy image --severity ${{ inputs.image_security_severity }} "$IMAGE"
+
+      - name: Upload Trivy results to GitHub Security
+        if: ${{ always() }}
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-image-report.sarif
+          category: trivy-image-scan
+
+      - name: Upload image scan report
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: trivy-image-report
+          path: trivy-image-report.json
+          retention-days: 30
+
+  security-gate:
+    needs: [security-scan, scan-image-security]
+    if: ${{ always() && (inputs.security_scan_strict || inputs.image_security_strict) }}
+    runs-on: ${{ fromJson(inputs.runs_on) }}
+    steps:
+      - name: Download security reports
+        uses: actions/download-artifact@v4
+        with:
+          pattern: "*-report*"
+          merge-multiple: true
+
+      - name: Aggregate security findings
+        id: aggregate
+        run: |
+          echo "Aggregating security findings from all scans..."
+          
+          # Initialize counters
+          CRITICAL=0
+          HIGH=0
+          MEDIUM=0
+          LOW=0
+          
+          # Parse Bandit report (if exists)
+          if [ -f "bandit-report.json" ]; then
+            echo "Processing Bandit results..."
+            BANDIT_HIGH=$(cat bandit-report.json | python3 -c "import sys, json; data = json.load(sys.stdin); print(len([i for i in data.get('results', []) if i.get('issue_severity') == 'HIGH']))" 2>/dev/null || echo 0)
+            BANDIT_MEDIUM=$(cat bandit-report.json | python3 -c "import sys, json; data = json.load(sys.stdin); print(len([i for i in data.get('results', []) if i.get('issue_severity') == 'MEDIUM']))" 2>/dev/null || echo 0)
+            BANDIT_LOW=$(cat bandit-report.json | python3 -c "import sys, json; data = json.load(sys.stdin); print(len([i for i in data.get('results', []) if i.get('issue_severity') == 'LOW']))" 2>/dev/null || echo 0)
+            HIGH=$((HIGH + BANDIT_HIGH))
+            MEDIUM=$((MEDIUM + BANDIT_MEDIUM))
+            LOW=$((LOW + BANDIT_LOW))
+            echo "  Bandit: HIGH=$BANDIT_HIGH, MEDIUM=$BANDIT_MEDIUM, LOW=$BANDIT_LOW"
+          fi
+          
+          # Parse Trivy filesystem report (if exists)
+          if [ -f "trivy-fs-report.json" ]; then
+            echo "Processing Trivy filesystem results..."
+            TRIVY_FS_CRITICAL=$(cat trivy-fs-report.json | python3 -c "import sys, json; data = json.load(sys.stdin); print(sum(len([v for v in r.get('Vulnerabilities', []) if v.get('Severity') == 'CRITICAL']) for r in data.get('Results', [])))" 2>/dev/null || echo 0)
+            TRIVY_FS_HIGH=$(cat trivy-fs-report.json | python3 -c "import sys, json; data = json.load(sys.stdin); print(sum(len([v for v in r.get('Vulnerabilities', []) if v.get('Severity') == 'HIGH']) for r in data.get('Results', [])))" 2>/dev/null || echo 0)
+            TRIVY_FS_MEDIUM=$(cat trivy-fs-report.json | python3 -c "import sys, json; data = json.load(sys.stdin); print(sum(len([v for v in r.get('Vulnerabilities', []) if v.get('Severity') == 'MEDIUM']) for r in data.get('Results', [])))" 2>/dev/null || echo 0)
+            CRITICAL=$((CRITICAL + TRIVY_FS_CRITICAL))
+            HIGH=$((HIGH + TRIVY_FS_HIGH))
+            MEDIUM=$((MEDIUM + TRIVY_FS_MEDIUM))
+            echo "  Trivy FS: CRITICAL=$TRIVY_FS_CRITICAL, HIGH=$TRIVY_FS_HIGH, MEDIUM=$TRIVY_FS_MEDIUM"
+          fi
+          
+          # Parse Trivy image report (if exists)
+          if [ -f "trivy-image-report.json" ]; then
+            echo "Processing Trivy image results..."
+            TRIVY_IMG_CRITICAL=$(cat trivy-image-report.json | python3 -c "import sys, json; data = json.load(sys.stdin); print(sum(len([v for v in r.get('Vulnerabilities', []) if v.get('Severity') == 'CRITICAL']) for r in data.get('Results', [])))" 2>/dev/null || echo 0)
+            TRIVY_IMG_HIGH=$(cat trivy-image-report.json | python3 -c "import sys, json; data = json.load(sys.stdin); print(sum(len([v for v in r.get('Vulnerabilities', []) if v.get('Severity') == 'HIGH']) for r in data.get('Results', [])))" 2>/dev/null || echo 0)
+            TRIVY_IMG_MEDIUM=$(cat trivy-image-report.json | python3 -c "import sys, json; data = json.load(sys.stdin); print(sum(len([v for v in r.get('Vulnerabilities', []) if v.get('Severity') == 'MEDIUM']) for r in data.get('Results', [])))" 2>/dev/null || echo 0)
+            CRITICAL=$((CRITICAL + TRIVY_IMG_CRITICAL))
+            HIGH=$((HIGH + TRIVY_IMG_HIGH))
+            MEDIUM=$((MEDIUM + TRIVY_IMG_MEDIUM))
+            echo "  Trivy Image: CRITICAL=$TRIVY_IMG_CRITICAL, HIGH=$TRIVY_IMG_HIGH, MEDIUM=$TRIVY_IMG_MEDIUM"
+          fi
+          
+          echo ""
+          echo "========================================="
+          echo "Security Gate Summary"
+          echo "========================================="
+          echo "Total Vulnerabilities:"
+          echo "  CRITICAL: $CRITICAL (max: ${{ inputs.security_gate_max_critical }})"
+          echo "  HIGH:     $HIGH (max: ${{ inputs.security_gate_max_high }})"
+          echo "  MEDIUM:   $MEDIUM (max: ${{ inputs.security_gate_max_medium }})"
+          echo "========================================="
+          
+          # Check thresholds
+          FAILED=0
+          if [ "$CRITICAL" -gt "${{ inputs.security_gate_max_critical }}" ]; then
+            echo "❌ CRITICAL vulnerabilities exceeded threshold ($CRITICAL > ${{ inputs.security_gate_max_critical }})"
+            FAILED=1
+          fi
+          
+          if [ "$HIGH" -gt "${{ inputs.security_gate_max_high }}" ]; then
+            echo "❌ HIGH vulnerabilities exceeded threshold ($HIGH > ${{ inputs.security_gate_max_high }})"
+            FAILED=1
+          fi
+          
+          if [ "$MEDIUM" -gt "${{ inputs.security_gate_max_medium }}" ]; then
+            echo "❌ MEDIUM vulnerabilities exceeded threshold ($MEDIUM > ${{ inputs.security_gate_max_medium }})"
+            FAILED=1
+          fi
+          
+          if [ "$FAILED" -eq 1 ]; then
+            echo ""
+            echo "❌ Security Gate FAILED - Vulnerability thresholds exceeded"
+            exit 1
+          else
+            echo ""
+            echo "✅ Security Gate PASSED - All thresholds met"
+          fi
+
+      - name: Generate consolidated report
+        if: ${{ always() }}
+        run: |
+          echo "# Security Gate Report" > security-gate-report.md
+          echo "" >> security-gate-report.md
+          echo "## Summary" >> security-gate-report.md
+          echo "Generated: $(date)" >> security-gate-report.md
+          echo "" >> security-gate-report.md
+          echo "## Thresholds" >> security-gate-report.md
+          echo "- Critical: ${{ inputs.security_gate_max_critical }}" >> security-gate-report.md
+          echo "- High: ${{ inputs.security_gate_max_high }}" >> security-gate-report.md
+          echo "- Medium: ${{ inputs.security_gate_max_medium }}" >> security-gate-report.md
+
+      - name: Upload consolidated report
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: security-gate-report
+          path: security-gate-report.md
+          retention-days: 90
+
+  update-argocd:
+    needs: [build-and-push, security-gate]
+    if: ${{ always() && inputs.argocd_repo != '' && (inputs.argocd_image_path != '' || inputs.argocd_update_pattern != '') && (needs.build-and-push.result == 'success') && (needs.security-gate.result == 'success' || needs.security-gate.result == 'skipped') }}
     runs-on: ${{ fromJson(inputs.runs_on) }}
     permissions:
       contents: write

@@ -17,7 +17,7 @@ on:
       harbor_registry:
         required: false
         type: string
-        default: "harbor.minhdq.dev"
+        default: "harbor.internal.minhdq.dev"
       dockerfile:
         required: false
         type: string
