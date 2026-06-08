@@ -166,6 +166,9 @@ on:
         required: false
         description: "GitHub token with access to ArgoCD config repo"
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   test:
     if: ${{ inputs.run_tests }}
@@ -202,7 +205,7 @@ jobs:
       - name: Run Tests
         run: |
           CMD="pytest --cov=. --cov-report=term-missing --cov-report=html --cov-fail-under=${{ inputs.min_coverage }}"
-          
+
           if [ -f "uv.lock" ]; then
             uv run $CMD
           elif [ -f "poetry.lock" ]; then
@@ -266,7 +269,7 @@ jobs:
           if [ -n "${{ inputs.ruff_config }}" ]; then
             CONFIG_ARG="--config ${{ inputs.ruff_config }}"
           fi
-          
+
           # Run ruff and capture output in JSON format for parsing
           if [ -f "uv.lock" ]; then
             uv run ruff check . --output-format=json $CONFIG_ARG > ruff-report.json || true
@@ -285,7 +288,7 @@ jobs:
           if [ -n "${{ inputs.ruff_config }}" ]; then
             CONFIG_ARG="--config ${{ inputs.ruff_config }}"
           fi
-          
+
           if [ -f "uv.lock" ]; then
             uv run ruff format --check . $CONFIG_ARG
           elif [ -f "poetry.lock" ]; then
@@ -301,23 +304,23 @@ jobs:
           ERROR_COUNT=$(cat ruff-report.json | python3 -c "import sys, json; data = json.load(sys.stdin); print(sum(1 for item in data if item.get('code', '').startswith('E')))" 2>/dev/null || echo 0)
           WARNING_COUNT=$(cat ruff-report.json | python3 -c "import sys, json; data = json.load(sys.stdin); print(sum(1 for item in data if item.get('code', '').startswith('W')))" 2>/dev/null || echo 0)
           TOTAL_COUNT=$(cat ruff-report.json | python3 -c "import sys, json; data = json.load(sys.stdin); print(len(data))" 2>/dev/null || echo 0)
-          
+
           echo "Quality Gate Results:"
           echo "  Total Issues: $TOTAL_COUNT"
           echo "  Errors: $ERROR_COUNT (max: ${{ inputs.quality_gate_max_errors }})"
           echo "  Warnings: $WARNING_COUNT (max: ${{ inputs.quality_gate_max_warnings }})"
-          
+
           FAILED=0
           if [ "$ERROR_COUNT" -gt "${{ inputs.quality_gate_max_errors }}" ]; then
             echo "❌ ERROR: Too many errors ($ERROR_COUNT > ${{ inputs.quality_gate_max_errors }})"
             FAILED=1
           fi
-          
+
           if [ "$WARNING_COUNT" -gt "${{ inputs.quality_gate_max_warnings }}" ]; then
             echo "❌ ERROR: Too many warnings ($WARNING_COUNT > ${{ inputs.quality_gate_max_warnings }})"
             FAILED=1
           fi
-          
+
           if [ "$FAILED" -eq 1 ]; then
             echo "Quality gate FAILED - thresholds exceeded"
             exit 1
@@ -515,7 +518,7 @@ jobs:
       contents: read
     outputs:
       version: ${{ steps.version.outputs.VERSION }}
-    
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -533,12 +536,12 @@ jobs:
             echo "pyproject.toml not found, using run number"
             VERSION="0.0.${{ github.run_number }}"
           fi
-          
+
           if [ -z "$VERSION" ]; then
             echo "Could not extract version, using run number"
             VERSION="0.0.${{ github.run_number }}"
           fi
-          
+
           echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
 
       - name: Set up Docker Buildx
@@ -595,10 +598,10 @@ jobs:
         run: |
           IMAGE="${{ inputs.harbor_registry }}/${{ inputs.harbor_project }}/${{ inputs.image_name }}:${{ needs.build-and-push.outputs.version }}"
           echo "Scanning image: $IMAGE"
-          
+
           # Pull the image
           docker pull "$IMAGE"
-          
+
           # Scan and generate reports
           trivy image --format json --output trivy-image-report.json "$IMAGE" || true
           trivy image --format sarif --output trivy-image-report.sarif "$IMAGE" || true
@@ -634,13 +637,13 @@ jobs:
         id: aggregate
         run: |
           echo "Aggregating security findings from all scans..."
-          
+
           # Initialize counters
           CRITICAL=0
           HIGH=0
           MEDIUM=0
           LOW=0
-          
+
           # Parse Bandit report (if exists)
           if [ -f "bandit-report.json" ]; then
             echo "Processing Bandit results..."
@@ -652,7 +655,7 @@ jobs:
             LOW=$((LOW + BANDIT_LOW))
             echo "  Bandit: HIGH=$BANDIT_HIGH, MEDIUM=$BANDIT_MEDIUM, LOW=$BANDIT_LOW"
           fi
-          
+
           # Parse Trivy filesystem report (if exists)
           if [ -f "trivy-fs-report.json" ]; then
             echo "Processing Trivy filesystem results..."
@@ -664,7 +667,7 @@ jobs:
             MEDIUM=$((MEDIUM + TRIVY_FS_MEDIUM))
             echo "  Trivy FS: CRITICAL=$TRIVY_FS_CRITICAL, HIGH=$TRIVY_FS_HIGH, MEDIUM=$TRIVY_FS_MEDIUM"
           fi
-          
+
           # Parse Trivy image report (if exists)
           if [ -f "trivy-image-report.json" ]; then
             echo "Processing Trivy image results..."
@@ -676,7 +679,7 @@ jobs:
             MEDIUM=$((MEDIUM + TRIVY_IMG_MEDIUM))
             echo "  Trivy Image: CRITICAL=$TRIVY_IMG_CRITICAL, HIGH=$TRIVY_IMG_HIGH, MEDIUM=$TRIVY_IMG_MEDIUM"
           fi
-          
+
           echo ""
           echo "========================================="
           echo "Security Gate Summary"
@@ -686,24 +689,24 @@ jobs:
           echo "  HIGH:     $HIGH (max: ${{ inputs.security_gate_max_high }})"
           echo "  MEDIUM:   $MEDIUM (max: ${{ inputs.security_gate_max_medium }})"
           echo "========================================="
-          
+
           # Check thresholds
           FAILED=0
           if [ "$CRITICAL" -gt "${{ inputs.security_gate_max_critical }}" ]; then
             echo "❌ CRITICAL vulnerabilities exceeded threshold ($CRITICAL > ${{ inputs.security_gate_max_critical }})"
             FAILED=1
           fi
-          
+
           if [ "$HIGH" -gt "${{ inputs.security_gate_max_high }}" ]; then
             echo "❌ HIGH vulnerabilities exceeded threshold ($HIGH > ${{ inputs.security_gate_max_high }})"
             FAILED=1
           fi
-          
+
           if [ "$MEDIUM" -gt "${{ inputs.security_gate_max_medium }}" ]; then
             echo "❌ MEDIUM vulnerabilities exceeded threshold ($MEDIUM > ${{ inputs.security_gate_max_medium }})"
             FAILED=1
           fi
-          
+
           if [ "$FAILED" -eq 1 ]; then
             echo ""
             echo "❌ Security Gate FAILED - Vulnerability thresholds exceeded"

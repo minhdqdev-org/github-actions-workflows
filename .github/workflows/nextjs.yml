@@ -32,12 +32,15 @@ on:
       HARBOR_PASSWORD:
         required: true
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   test-and-build:
     runs-on: ${{ fromJson(inputs.runs_on) }}
     permissions:
       contents: read
-    
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
