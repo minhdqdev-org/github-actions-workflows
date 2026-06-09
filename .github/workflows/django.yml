@@ -159,9 +159,9 @@ on:
         description: "Branch to update in ArgoCD config repository"
     secrets:
       HARBOR_USERNAME:
-        required: true
+        required: false
       HARBOR_PASSWORD:
-        required: true
+        required: false
       ARGOCD_REPO_TOKEN:
         required: false
         description: "GitHub token with access to ArgoCD config repo"
@@ -176,10 +176,6 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-
-      - name: Install uv
-        if: ${{ hashFiles('uv.lock') != '' }}
-        uses: astral-sh/setup-uv@v5
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -229,10 +225,6 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-
-      - name: Install uv
-        if: ${{ hashFiles('uv.lock') != '' }}
-        uses: astral-sh/setup-uv@v5
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -344,10 +336,6 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Install uv
-        if: ${{ hashFiles('uv.lock') != '' }}
-        uses: astral-sh/setup-uv@v5
-
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -411,10 +399,6 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Install uv
-        if: ${{ hashFiles('uv.lock') != '' }}
-        uses: astral-sh/setup-uv@v5
-
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -468,13 +452,6 @@ jobs:
             safety check --json > safety-report.json || true
             safety check
           fi
-
-      - name: Install Trivy
-        run: |
-          wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key | sudo apt-key add -
-          echo "deb https://aquasecurity.github.io/trivy-repo/deb $(lsb_release -sc) main" | sudo tee -a /etc/apt/sources.list.d/trivy.list
-          sudo apt-get update
-          sudo apt-get install -y trivy
 
       - name: Run Trivy filesystem scan (SCA)
         run: |
@@ -551,8 +528,8 @@ jobs:
         uses: docker/login-action@v3
         with:
           registry: ${{ inputs.harbor_registry }}
-          username: ${{ secrets.HARBOR_USERNAME }}
-          password: ${{ secrets.HARBOR_PASSWORD }}
+          username: ${{ secrets.HARBOR_USERNAME || env.HARBOR_USERNAME }}
+          password: ${{ secrets.HARBOR_PASSWORD || env.HARBOR_PASSWORD }}
 
       - name: Build and push Docker image
         uses: docker/build-push-action@v5
@@ -584,15 +561,8 @@ jobs:
         uses: docker/login-action@v3
         with:
           registry: ${{ inputs.harbor_registry }}
-          username: ${{ secrets.HARBOR_USERNAME }}
-          password: ${{ secrets.HARBOR_PASSWORD }}
-
-      - name: Install Trivy
-        run: |
-          wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key | sudo apt-key add -
-          echo "deb https://aquasecurity.github.io/trivy-repo/deb $(lsb_release -sc) main" | sudo tee -a /etc/apt/sources.list.d/trivy.list
-          sudo apt-get update
-          sudo apt-get install -y trivy
+          username: ${{ secrets.HARBOR_USERNAME || env.HARBOR_USERNAME }}
+          password: ${{ secrets.HARBOR_PASSWORD || env.HARBOR_PASSWORD }}
 
       - name: Run Trivy image scan
         run: |
@@ -758,12 +728,6 @@ jobs:
         run: |
           cd argocd-config
           VERSION="${{ needs.build-and-push.outputs.version }}"
-
-          # Install yq if not available
-          if ! command -v yq &> /dev/null; then
-            sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
-            sudo chmod +x /usr/local/bin/yq
-          fi
 
           # Update the image tag
           yq eval -i '${{ inputs.argocd_image_key }} = "${{ inputs.harbor_registry }}/${{ inputs.harbor_project }}/${{ inputs.image_name }}:'"$VERSION"'"' ${{ inputs.argocd_image_path }}
