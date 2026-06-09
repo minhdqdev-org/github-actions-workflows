@@ -2,6 +2,11 @@ name: Docker CI with notification
 
 on:
   workflow_call:
+    secrets:
+      HARBOR_USERNAME:
+        required: true
+      HARBOR_PASSWORD:
+        required: true
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
