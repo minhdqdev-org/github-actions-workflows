@@ -2,11 +2,6 @@ name: Docker CI with notification
 
 on:
   workflow_call:
-    secrets:
-      HARBOR_USERNAME:
-        required: true
-      HARBOR_PASSWORD:
-        required: true
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
@@ -44,8 +39,8 @@ jobs:
         uses: docker/login-action@v3
         with:
           registry: harbor.internal.minhdq.dev
-          username: ${{ secrets.HARBOR_USERNAME }}
-          password: ${{ secrets.HARBOR_PASSWORD }}
+          username: ${{ env.HARBOR_USERNAME }}
+          password: ${{ env.HARBOR_PASSWORD }}
 
       - name: Build and push Docker image
         uses: docker/build-push-action@v6
