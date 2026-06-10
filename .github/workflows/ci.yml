@@ -39,7 +39,7 @@ jobs:
           elif [ -f "Cargo.toml" ]; then
             VERSION=$(grep '^version' Cargo.toml | head -1 | cut -d'"' -f2)
           else
-            VERSION="${GITHUB_SHA:0:7}"
+            VERSION="$(git rev-parse --short HEAD)"
           fi
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
@@ -55,7 +55,7 @@ jobs:
             case "$TYPE" in
               latest)    TAGS+=("${BASE}:latest") ;;
               version)   TAGS+=("${BASE}:${{ steps.version.outputs.version }}") ;;
-              short_sha) TAGS+=("${BASE}:${GITHUB_SHA:0:7}") ;;
+              short_sha) TAGS+=("${BASE}:$(git rev-parse --short HEAD)") ;;
             esac
           done
 
