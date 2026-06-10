@@ -158,10 +158,6 @@ on:
         default: "main"
         description: "Branch to update in ArgoCD config repository"
     secrets:
-      HARBOR_USERNAME:
-        required: false
-      HARBOR_PASSWORD:
-        required: false
       ARGOCD_REPO_TOKEN:
         required: false
         description: "GitHub token with access to ArgoCD config repo"
@@ -525,11 +521,7 @@ jobs:
         uses: docker/setup-buildx-action@v3
 
       - name: Log in to Harbor
-        uses: docker/login-action@v3
-        with:
-          registry: ${{ inputs.harbor_registry }}
-          username: ${{ secrets.HARBOR_USERNAME || env.HARBOR_USERNAME }}
-          password: ${{ secrets.HARBOR_PASSWORD || env.HARBOR_PASSWORD }}
+        run: echo "$HARBOR_PASSWORD" | docker login "${{ inputs.harbor_registry }}" --username "$HARBOR_USERNAME" --password-stdin
 
       - name: Build and push Docker image
         uses: docker/build-push-action@v5
@@ -558,11 +550,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Log in to Harbor
-        uses: docker/login-action@v3
-        with:
-          registry: ${{ inputs.harbor_registry }}
-          username: ${{ secrets.HARBOR_USERNAME || env.HARBOR_USERNAME }}
-          password: ${{ secrets.HARBOR_PASSWORD || env.HARBOR_PASSWORD }}
+        run: echo "$HARBOR_PASSWORD" | docker login "${{ inputs.harbor_registry }}" --username "$HARBOR_USERNAME" --password-stdin
 
       - name: Run Trivy image scan
         run: |
