@@ -1,0 +1,14 @@
+name: CI — rc/*
+
+on:
+  push:
+    branches:
+      - rc/**
+
+jobs:
+  ci:
+    uses: minhdqdev-org/github-actions-workflows/.github/workflows/ci.yml@main
+    with:
+      # Produces: <version>-rc.<run_number>  (e.g. 1.0.1-rc.12)
+      # ArgoCD Image Updater: update-strategy=semver, allow-tags=regexp:^.*-rc\.[0-9]+$
+      tag_types: rc_version

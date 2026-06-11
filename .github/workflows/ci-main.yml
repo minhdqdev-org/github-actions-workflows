@@ -1,0 +1,14 @@
+name: CI — main
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  ci:
+    uses: minhdqdev-org/github-actions-workflows/.github/workflows/ci.yml@main
+    with:
+      # Produces: <version> (e.g. 1.0.0) + latest
+      # ArgoCD Image Updater: update-strategy=semver (default strict semver constraint)
+      tag_types: version,latest

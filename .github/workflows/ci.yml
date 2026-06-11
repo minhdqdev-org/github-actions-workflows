@@ -8,7 +8,12 @@ on:
         default: short_sha
         description: >
           Comma-separated tag types to publish.
-          Accepted values: latest, version, short_sha.
+          Accepted values: latest, version, short_sha, dev_sha, rc_version.
+            dev_sha     → dev-<short_commit_hash>  (DEV environment)
+            rc_version  → <version>-rc.<run_number> (UAT environment)
+            version     → <version>                 (PROD environment, strict semver)
+            short_sha   → <short_commit_hash>
+            latest      → latest
           Example: "latest, version, short_sha"
       extra_tags:
         type: string
@@ -16,6 +21,14 @@ on:
         description: >
           Comma-separated literal tag names to publish in addition to tag_types.
           Example: "stable, rc1"
+      dockerfile:
+        type: string
+        default: "./Dockerfile"
+        description: Path to the Dockerfile relative to the repository root.
+      dockerfile_target:
+        type: string
+        default: ""
+        description: Build target for multi-stage Dockerfiles. Leave empty to build the final stage.
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
@@ -53,9 +66,11 @@ jobs:
           for TYPE in "${TYPES[@]}"; do
             TYPE="${TYPE// /}"
             case "$TYPE" in
-              latest)    TAGS+=("${BASE}:latest") ;;
-              version)   TAGS+=("${BASE}:${{ steps.version.outputs.version }}") ;;
-              short_sha) TAGS+=("${BASE}:$(git rev-parse --short HEAD)") ;;
+              latest)     TAGS+=("${BASE}:latest") ;;
+              version)    TAGS+=("${BASE}:${{ steps.version.outputs.version }}") ;;
+              short_sha)  TAGS+=("${BASE}:$(git rev-parse --short HEAD)") ;;
+              dev_sha)    TAGS+=("${BASE}:dev-$(git rev-parse --short HEAD)") ;;
+              rc_version) TAGS+=("${BASE}:${{ steps.version.outputs.version }}-rc.${{ github.run_number }}") ;;
             esac
           done
 
@@ -83,6 +98,8 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
+          file: ${{ inputs.dockerfile }}
+          target: ${{ inputs.dockerfile_target }}
           push: true
           tags: ${{ steps.tags.outputs.tags }}
           cache-from: type=registry,ref=harbor.internal.minhdq.dev/minhdqdev/${{ github.event.repository.name }}:buildcache

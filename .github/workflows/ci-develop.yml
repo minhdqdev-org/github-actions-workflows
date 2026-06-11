@@ -1,0 +1,14 @@
+name: CI — develop
+
+on:
+  push:
+    branches:
+      - develop
+
+jobs:
+  ci:
+    uses: minhdqdev-org/github-actions-workflows/.github/workflows/ci.yml@main
+    with:
+      # Produces: dev-<short_sha>  (e.g. dev-a1b2c3d)
+      # ArgoCD Image Updater: update-strategy=latest, allow-tags=regexp:^dev-.*$
+      tag_types: dev_sha
