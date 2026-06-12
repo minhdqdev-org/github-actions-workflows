@@ -28,12 +28,15 @@ jobs:
         id: version
         run: |
           if [ -f "package.json" ]; then
-            VERSION=$(python3 -c "import json; print(json.load(open('package.json'))['version'])")
-          elif [ -f "pyproject.toml" ]; then
+            VERSION=$(python3 -c "import json; d=json.load(open('package.json')); print(d.get('version') or '')" 2>/dev/null)
+          fi
+          if [ -z "$VERSION" ] && [ -f "pyproject.toml" ]; then
             VERSION=$(python3 -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
-          elif [ -f "Cargo.toml" ]; then
+          fi
+          if [ -z "$VERSION" ] && [ -f "Cargo.toml" ]; then
             VERSION=$(grep '^version' Cargo.toml | head -1 | cut -d'"' -f2)
-          else
+          fi
+          if [ -z "$VERSION" ]; then
             VERSION="$(git rev-parse --short HEAD)"
           fi
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
@@ -59,7 +62,8 @@ jobs:
 
           {
             echo "tags<<EOF"
-            printf '%s\n' "${TAGS[@]}"
+            printf '%s
+' "${TAGS[@]}"
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
 
@@ -104,7 +108,8 @@ jobs:
                   `Workflow: ${context.workflow}`,
                   `Run #${context.runNumber} on ${context.ref.split('/').pop()}`,
                   `Commit: ${context.sha.slice(0, 7)}`,
-                ].join('\n'),
+                ].join('
+'),
               },
             };
             try {
