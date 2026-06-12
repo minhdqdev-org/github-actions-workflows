@@ -99,6 +99,12 @@ jobs:
           RUN_ID: ${{ github.run_id }}
         run: |
           # jq + curl are baked into the runner image — avoids a Node action download.
+          # NOTIHUB_API_KEY is injected into the runner via envFrom (notihub-credentials
+          # secret) — same mechanism as HARBOR_USERNAME/HARBOR_PASSWORD above.
+          if [ -z "${NOTIHUB_API_KEY:-}" ]; then
+            echo "::warning::NOTIHUB_API_KEY not set on runner; skipping notification"
+            exit 0
+          fi
           MESSAGE=$(printf 'Workflow: %s\nRun #%s on %s\nCommit: %s' \
             "$WORKFLOW" "$RUN_NUMBER" "$REF_NAME" "${GITHUB_SHA:0:7}")
           jq -n \
@@ -106,6 +112,8 @@ jobs:
             --arg origin "$PROJECT_NAME" \
             --arg title "✅ ${PROJECT_NAME} — CI/CD succeeded" \
             --arg message "$MESSAGE" \
-            '{traceNo: $traceNo, origin: $origin, level: "success", data: {title: $title, message: $message}}' \
+            '{traceNo: $traceNo, origin: $origin, level: "INFO", routeTo: {type: "TELEGRAM_CHANNEL"}, data: {title: $title, message: $message}}' \
           | curl -fsS -m 10 -X POST "${NOTIHUB_URL%/}/api/v1/notifications/" \
-              -H 'Content-Type: application/json' --data-binary @-
+              -H 'Content-Type: application/json' \
+              -H "x-api-key: ${NOTIHUB_API_KEY}" \
+              --data-binary @-
