@@ -1,26 +1,8 @@
-name: Docker CI with notification
+name: Docker CI
 
 on:
   workflow_call:
     inputs:
-      tag_types:
-        type: string
-        default: short_sha
-        description: >
-          Comma-separated tag types to publish.
-          Accepted values: latest, version, short_sha, dev_sha, rc_version.
-            dev_sha     → dev-<short_commit_hash>  (DEV environment)
-            rc_version  → <version>-rc.<run_number> (UAT environment)
-            version     → <version>                 (PROD environment, strict semver)
-            short_sha   → <short_commit_hash>
-            latest      → latest
-          Example: "latest, version, short_sha"
-      extra_tags:
-        type: string
-        default: ""
-        description: >
-          Comma-separated literal tag names to publish in addition to tag_types.
-          Example: "stable, rc1"
       dockerfile:
         type: string
         default: "./Dockerfile"
@@ -28,7 +10,7 @@ on:
       dockerfile_target:
         type: string
         default: ""
-        description: Build target for multi-stage Dockerfiles. Leave empty to build the final stage.
+        description: Build target for multi-stage Dockerfiles.
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
@@ -60,25 +42,20 @@ jobs:
         id: tags
         run: |
           BASE="harbor.internal.minhdq.dev/minhdqdev/${{ github.event.repository.name }}"
+          REF="${{ github.ref }}"
           TAGS=()
 
-          IFS=',' read -ra TYPES <<< "${{ inputs.tag_types }}"
-          for TYPE in "${TYPES[@]}"; do
-            TYPE="${TYPE// /}"
-            case "$TYPE" in
-              latest)     TAGS+=("${BASE}:latest") ;;
-              version)    TAGS+=("${BASE}:${{ steps.version.outputs.version }}") ;;
-              short_sha)  TAGS+=("${BASE}:$(git rev-parse --short HEAD)") ;;
-              dev_sha)    TAGS+=("${BASE}:dev-$(git rev-parse --short HEAD)") ;;
-              rc_version) TAGS+=("${BASE}:${{ steps.version.outputs.version }}-rc.${{ github.run_number }}") ;;
-            esac
-          done
-
-          IFS=',' read -ra EXTRAS <<< "${{ inputs.extra_tags }}"
-          for TAG in "${EXTRAS[@]}"; do
-            TAG="${TAG// /}"
-            [ -n "$TAG" ] && TAGS+=("${BASE}:${TAG}")
-          done
+          if [ "$REF" = "refs/heads/develop" ]; then
+            # DEV: dev-<short_sha>  →  ArgoCD latest strategy, regexp:^dev-.*$
+            TAGS+=("${BASE}:dev-$(git rev-parse --short HEAD)")
+          elif echo "$REF" | grep -qE "^refs/heads/rc/"; then
+            # UAT: <version>-rc.<run_number>  →  ArgoCD semver strategy, regexp:^.*-rc\.[0-9]+$
+            TAGS+=("${BASE}:${{ steps.version.outputs.version }}-rc.${{ github.run_number }}")
+          elif [ "$REF" = "refs/heads/main" ] || [ "$REF" = "refs/heads/master" ]; then
+            # PROD: <version> + latest  →  ArgoCD semver strategy
+            TAGS+=("${BASE}:${{ steps.version.outputs.version }}")
+            TAGS+=("${BASE}:latest")
+          fi
 
           {
             echo "tags<<EOF"
