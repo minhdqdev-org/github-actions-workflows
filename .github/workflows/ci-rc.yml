@@ -1,14 +1,21 @@
 name: CI — rc/*
 
 on:
-  push:
-    branches:
-      - rc/**
+  workflow_call:
+    inputs:
+      dockerfile:
+        type: string
+        default: "./Dockerfile"
+        description: Path to the Dockerfile.
+      dockerfile_target:
+        type: string
+        default: ""
+        description: Build target for multi-stage Dockerfiles.
 
 jobs:
   ci:
     uses: minhdqdev-org/github-actions-workflows/.github/workflows/ci.yml@main
     with:
-      # Produces: <version>-rc.<run_number>  (e.g. 1.0.1-rc.12)
-      # ArgoCD Image Updater: update-strategy=semver, allow-tags=regexp:^.*-rc\.[0-9]+$
       tag_types: rc_version
+      dockerfile: ${{ inputs.dockerfile }}
+      dockerfile_target: ${{ inputs.dockerfile_target }}

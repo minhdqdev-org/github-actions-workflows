@@ -1,14 +1,21 @@
 name: CI — develop
 
 on:
-  push:
-    branches:
-      - develop
+  workflow_call:
+    inputs:
+      dockerfile:
+        type: string
+        default: "./Dockerfile"
+        description: Path to the Dockerfile.
+      dockerfile_target:
+        type: string
+        default: ""
+        description: Build target for multi-stage Dockerfiles.
 
 jobs:
   ci:
     uses: minhdqdev-org/github-actions-workflows/.github/workflows/ci.yml@main
     with:
-      # Produces: dev-<short_sha>  (e.g. dev-a1b2c3d)
-      # ArgoCD Image Updater: update-strategy=latest, allow-tags=regexp:^dev-.*$
       tag_types: dev_sha
+      dockerfile: ${{ inputs.dockerfile }}
+      dockerfile_target: ${{ inputs.dockerfile_target }}
