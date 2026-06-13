@@ -86,7 +86,26 @@ jobs:
           cache-to: type=registry,ref=harbor.internal.minhdq.dev/minhdqdev/${{ github.event.repository.name }}:buildcache,mode=max
 
       - name: Summary
-        run: echo "### Image published to Harbor :rocket:" >> "$GITHUB_STEP_SUMMARY"
+        env:
+          TAGS: ${{ steps.tags.outputs.tags }}
+          VERSION: ${{ steps.tags.outputs.version }}
+        run: |
+          {
+            echo "### Image published to Harbor :rocket:"
+            echo ""
+            echo "| Field | Value |"
+            echo "| --- | --- |"
+            echo "| **Version** | \`${VERSION}\` |"
+            echo "| **Run** | [#${{ github.run_number }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}) |"
+            echo "| **Ref** | \`${{ github.ref_name }}\` |"
+            echo "| **Commit** | \`${GITHUB_SHA:0:7}\` |"
+            echo ""
+            echo "**Tags pushed:**"
+            echo ""
+            while IFS= read -r tag; do
+              [ -n "$tag" ] && echo "- \`${tag}\`"
+            done <<< "$TAGS"
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Send success notification
         continue-on-error: true
