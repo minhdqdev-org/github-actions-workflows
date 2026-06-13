@@ -116,6 +116,8 @@ jobs:
           RUN_NUMBER: ${{ github.run_number }}
           REF_NAME: ${{ github.ref_name }}
           RUN_ID: ${{ github.run_id }}
+          VERSION: ${{ steps.tags.outputs.version }}
+          TAGS: ${{ steps.tags.outputs.tags }}
         run: |
           # jq + curl are baked into the runner image — avoids a Node action download.
           # NOTIHUB_API_KEY is injected into the runner via envFrom (notihub-credentials
@@ -124,8 +126,9 @@ jobs:
             echo "::warning::NOTIHUB_API_KEY not set on runner; skipping notification"
             exit 0
           fi
-          MESSAGE=$(printf 'Workflow: %s\nRun #%s on %s\nCommit: %s' \
-            "$WORKFLOW" "$RUN_NUMBER" "$REF_NAME" "${GITHUB_SHA:0:7}")
+          TAGS_LIST=$(while IFS= read -r tag; do [ -n "$tag" ] && printf '  • %s\n' "$tag"; done <<< "$TAGS")
+          MESSAGE=$(printf 'Workflow: %s\nRun #%s on %s\nCommit: %s\nVersion: %s\nTags:\n%s' \
+            "$WORKFLOW" "$RUN_NUMBER" "$REF_NAME" "${GITHUB_SHA:0:7}" "$VERSION" "$TAGS_LIST")
           jq -n \
             --arg traceNo "github-run-${RUN_ID}" \
             --arg origin "$PROJECT_NAME" \
