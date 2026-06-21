@@ -48,8 +48,10 @@ jobs:
             # DEV: dev-<short_sha>  →  ArgoCD latest strategy, regexp:^dev-.*$
             TAGS+=("${BASE}:dev-$(git rev-parse --short HEAD)")
           elif echo "$REF" | grep -qE "^refs/heads/rc/"; then
-            # UAT: <version>-rc.<run_number>  →  ArgoCD semver strategy, regexp:^.*-rc\.[0-9]+$
-            TAGS+=("${BASE}:${VERSION}-rc.${{ github.run_number }}")
+            # UAT: <version>-rc.<commit_count>  →  ArgoCD semver strategy, regexp:^.*-rc\.[0-9]+$
+            # git rev-list --count HEAD gives a per-branch monotonic number with no gaps
+            # from unrelated branches (unlike github.run_number which is repo-wide).
+            TAGS+=("${BASE}:${VERSION}-rc.$(git rev-list --count HEAD)")
           elif [ "$REF" = "refs/heads/main" ] || [ "$REF" = "refs/heads/master" ]; then
             # PROD: <version> + latest  →  ArgoCD semver strategy
             TAGS+=("${BASE}:${VERSION}")
